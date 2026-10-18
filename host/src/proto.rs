@@ -273,3 +273,262 @@ impl Msg {
         o.to_vec()
     }
 
+    pub fn decode(kind: u8, mut b: &[u8]) -> Result<Self> {
+        let b = &mut b;
+        Ok(match kind {
+            1 => {
+                need(b, 3)?;
+                Self::Hello { magic: b.get_u16(), version: b.get_u8() }
+            }
+            2 => {
+                need(b, 17)?;
+                Self::HelloOk { version: b.get_u8(), host_nonce: array(b) }
+            }
+            3 => {
+                need(b, 48)?;
+                Self::Pair { client_nonce: array(b), mac: array(b) }
+            }
+            4 => {
+                need(b, 16)?;
+                Self::PairOk { token: array(b) }
+            }
+            5 => {
+                need(b, 1)?;
+                Self::PairFail { attempts_left: b.get_u8() }
+            }
+            6 => Self::Config(get_config(b)?),
+            7 => Self::ConfigOk(get_config(b)?),
+            8 => {
+                need(b, 2)?;
+                Self::ProbeResult { sent: b.get_u8(), echoed: b.get_u8() }
+            }
+            9 => {
+                need(b, 5)?;
+                Self::Start { transport: Transport::parse(b.get_u8())?, first_frame_id: b.get_u32() }
+            }
+            10 => {
+                need(b, 25)?;
+                Self::Stats(Stats {
+                    window_ms: b.get_u16(),
+                    loss_permille: b.get_u16(),
+                    completion_permille: b.get_u16(),
+                    jitter_us: b.get_u32(),
+                    fps_x10: b.get_u16(),
+                    latency_us: b.get_u32(),
+                    frames_skipped: b.get_u32(),
+                    udp_clean_ms: b.get_u32(),
+                    flags: b.get_u8(),
+                })
+            }
+            11 => {
+                need(b, 5)?;
+                Self::Migrate { transport: Transport::parse(b.get_u8())?, next_frame_id: b.get_u32() }
+            }
+            12 => {
+                need(b, 12)?;
+                Self::Ping { seq: b.get_u32(), t1: b.get_u64() }
+            }
+            13 => {
+                need(b, 20)?;
+                Self::Pong { seq: b.get_u32(), t1: b.get_u64(), t2: b.get_u64() }
+            }
+            14 => {
+                need(b, 0)?;
+                Self::KeyframeReq
+            }
+            15 => {
+                need(b, 1)?;
+                Self::Bye(Bye::parse(b.get_u8())?)
+            }
+            k => return Err(ProtoError::BadType(k)),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkHeader {
+    pub flags: u8,
+    pub frame_id: u32,
+    pub chunk_idx: u16,
+    pub chunk_total: u16,
+    pub timestamp_us: u64,
+}
+
+impl ChunkHeader {
+    pub fn write(&self, o: &mut impl BufMut) {
+        o.put_u16(MAGIC);
+        o.put_u8(VERSION);
+        o.put_u8(self.flags);
+        o.put_u32(self.frame_id);
+        o.put_u16(self.chunk_idx);
+        o.put_u16(self.chunk_total);
+        o.put_u64(self.timestamp_us);
+    }
+
+    pub fn parse(mut b: &[u8]) -> Result<Self> {
+        if b.len() < CHUNK_HEADER {
+            return Err(ProtoError::BadLength);
+        }
+        if b.get_u16() != MAGIC || b.get_u8() != VERSION {
+            return Err(ProtoError::BadMagic);
+        }
+        Ok(Self {
+            flags: b.get_u8(),
+            frame_id: b.get_u32(),
+            chunk_idx: b.get_u16(),
+            chunk_total: b.get_u16(),
+            timestamp_us: b.get_u64(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Attach {
+    pub kind: u8,
+    pub stripe: u8,
+    pub token: Token,
+}
+
+impl Attach {
+    pub fn encode(&self) -> [u8; ATTACH_LEN] {
+        let mut o = [0; ATTACH_LEN];
+        o[..2].copy_from_slice(&MAGIC.to_be_bytes());
+        o[2] = VERSION;
+        o[3] = self.kind;
+        o[4] = self.stripe;
+        o[6..].copy_from_slice(&self.token);
+        o
+    }
+
+    pub fn parse(mut b: &[u8]) -> Result<Self> {
+        need(b, ATTACH_LEN)?;
+        if b.get_u16() != MAGIC || b.get_u8() != VERSION {
+            return Err(ProtoError::BadMagic);
+        }
+        let (kind, stripe) = (b.get_u8(), b.get_u8());
+        b.advance(1);
+        Ok(Self { kind, stripe, token: array(&mut b) })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Probe {
+    pub echo: bool,
+    pub seq: u32,
+    pub t_us: u64,
+    pub token: Token,
+}
+
+impl Probe {
+    pub fn encode(&self) -> [u8; PROBE_LEN] {
+        let mut o = [0; PROBE_LEN];
+        let mut w = &mut o[..];
+        w.put_u16(MAGIC);
+        w.put_u8(VERSION);
+        w.put_u8(if self.echo { FLAG_PROBE_ECHO } else { FLAG_PROBE });
+        w.put_u32(self.seq);
+        w.put_u64(self.t_us);
+        w.put_slice(&self.token);
+        o
+    }
+
+    pub fn parse(mut b: &[u8]) -> Result<Self> {
+        need(b, PROBE_LEN)?;
+        if b.get_u16() != MAGIC || b.get_u8() != VERSION {
+            return Err(ProtoError::BadMagic);
+        }
+        let echo = match b.get_u8() {
+            FLAG_PROBE => false,
+            FLAG_PROBE_ECHO => true,
+            _ => return Err(ProtoError::BadValue),
+        };
+        Ok(Self { echo, seq: b.get_u32(), t_us: b.get_u64(), token: array(&mut b) })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    MouseMove { x: u16, y: u16 },
+    MouseButton { button: u8, down: bool },
+    Scroll { dx: i16, dy: i16 },
+    Key { keysym: u32, down: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputEvent {
+    pub seq: u32,
+    pub kind: EventKind,
+}
+
+impl InputEvent {
+    fn write(&self, o: &mut impl BufMut) {
+        let (kind, state, x, y, code) = match self.kind {
+            EventKind::MouseMove { x, y } => (1, 0, x, y, 0),
+            EventKind::MouseButton { button, down } => (2, down as u8, 0, 0, button as u32),
+            EventKind::Scroll { dx, dy } => (3, 0, dx as u16, dy as u16, 0),
+            EventKind::Key { keysym, down } => (4, down as u8, 0, 0, keysym),
+        };
+        o.put_u32(self.seq);
+        o.put_u8(kind);
+        o.put_u8(state);
+        o.put_u16(x);
+        o.put_u16(y);
+        o.put_u32(code);
+        o.put_u16(0);
+    }
+
+    fn parse(b: &mut &[u8]) -> Result<Self> {
+        let seq = b.get_u32();
+        let (kind, state, x, y, code) = (b.get_u8(), b.get_u8(), b.get_u16(), b.get_u16(), b.get_u32());
+        b.advance(2);
+        if state > 1 {
+            return Err(ProtoError::BadValue);
+        }
+        let down = state == 1;
+        let kind = match kind {
+            1 => EventKind::MouseMove { x, y },
+            2 if (1..=3).contains(&code) => EventKind::MouseButton { button: code as u8, down },
+            3 => EventKind::Scroll { dx: x as i16, dy: y as i16 },
+            4 => EventKind::Key { keysym: code, down },
+            _ => return Err(ProtoError::BadValue),
+        };
+        Ok(Self { seq, kind })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputPacket {
+    pub token: Token,
+    pub events: Vec<InputEvent>,
+}
+
+impl InputPacket {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut o = Vec::with_capacity(MAX_INPUT);
+        o.put_u16(MAGIC);
+        o.put_u8(VERSION);
+        o.put_u8(self.events.len() as u8);
+        o.put_slice(&self.token);
+        for e in &self.events {
+            e.write(&mut o);
+        }
+        o
+    }
+
+    pub fn parse(mut b: &[u8]) -> Result<Self> {
+        if b.len() < INPUT_HEADER {
+            return Err(ProtoError::BadLength);
+        }
+        if b.get_u16() != MAGIC || b.get_u8() != VERSION {
+            return Err(ProtoError::BadMagic);
+        }
+        let count = b.get_u8() as usize;
+        let token = array(&mut b);
+        if !(1..=3).contains(&count) {
+            return Err(ProtoError::BadValue);
+        }
+        need(b, count * EVENT_LEN)?;
+        let events = (0..count).map(|_| InputEvent::parse(&mut b)).collect::<Result<_>>()?;
+        Ok(Self { token, events })
+    }
+}
