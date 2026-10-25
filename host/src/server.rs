@@ -466,3 +466,190 @@ impl Conn {
         }
     }
 
+    fn configure(&mut self, config: Config, token: Token) -> bool {
+        let hub = &self.hub;
+        let stop = hub.stop.child_token();
+        let session = Arc::new(Session {
+            id: hub.next_id.fetch_add(1, Relaxed),
+            token,
+            config,
+            stripes: Stripes::new(config.stripes as usize, stop.clone()),
+            stop,
+            udp_addr: Mutex::new(None),
+            transport: AtomicU8::new(Transport::Tcp as u8),
+            rate: Mutex::new(Rate::new(config.quality, config.fps, Instant::now())),
+            next_frame: AtomicU32::new(1),
+            frames_sent: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+            dedup: Mutex::default(),
+            input_tx: hub.input_tx.clone(),
+            input_busy: AtomicBool::new(false),
+        });
+        let mut sessions = hub.sessions.lock().unwrap();
+        if sessions.len() >= hub.opts.max_sessions {
+            return false;
+        }
+        sessions.insert(token, session.clone());
+        self.session = Some(session);
+        true
+    }
+
+    async fn select(&self, echoed: u8) -> Option<Transport> {
+        let session = self.session.as_ref()?;
+        let mode = session.config.mode;
+        let started = Instant::now();
+        loop {
+            let chosen = selector::choose(mode, echoed, session.stripes.alive());
+            if chosen.is_some() || mode == Mode::UdpOnly || started.elapsed() >= ATTACH_TIMEOUT {
+                return chosen;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn on_stats(&mut self, w: &mut OwnedWriteHalf, stats: &Stats) -> Result<()> {
+        let hub = self.hub.clone();
+        let (Some(session), Some(selector)) = (&self.session, &mut self.selector) else { return Ok(()) };
+        let now = Instant::now();
+        let (quality, fps, rtt) = {
+            let mut rate = session.rate.lock().unwrap();
+            rate.on_stats(stats, selector.active(), now);
+            (rate.quality(), rate.fps(), rate.rtt_us())
+        };
+        let change = selector.on_stats(stats, session.stripes.alive(), now);
+        if let Some((transport, why)) = change {
+            session.transport.store(transport as u8, Relaxed);
+            let next_frame_id = session.next_frame.load(Relaxed);
+            send(w, &Msg::Migrate { transport, next_frame_id }).await?;
+            hub.metrics.line(format_args!(
+                "{},{},migrate_{why:?},{transport:?},,,,,,,,,,,,",
+                hub.now_us(),
+                session.id
+            ));
+            info!(session = session.id, ?transport, ?why, "migrated");
+        }
+        hub.metrics.line(format_args!(
+            "{},{},stats,{:?},{quality},{fps},{rtt},{},{},{},{},{},{},{},{},{}",
+            hub.now_us(),
+            session.id,
+            selector.active(),
+            stats.loss_permille,
+            stats.completion_permille,
+            stats.jitter_us,
+            stats.fps_x10,
+            stats.latency_us,
+            stats.frames_skipped,
+            session.stripes.skipped(),
+            session.frames_sent.load(Relaxed),
+            session.bytes_sent.load(Relaxed),
+        ));
+        Ok(())
+    }
+}
+
+struct Paced {
+    frame: Arc<Frame>,
+    addr: SocketAddr,
+    budget: Duration,
+}
+
+async fn pacer(socket: Arc<UdpSocket>, mut rx: amsc::Receiver<Paced>, stop: CancellationToken) {
+    loop {
+        let job = tokio::select! {
+            _ = stop.cancelled() => return,
+            job = rx.recv() => job,
+        };
+        let Some(Paced { frame, addr, budget }) = job else { return };
+        let chunks: Vec<_> = frame.data.iter().chain(&frame.parity).collect();
+        let total = chunks.len();
+        let started = Instant::now();
+        let mut sent = 0;
+        while sent < total {
+            let due = (started.elapsed().as_secs_f64() / budget.as_secs_f64().max(1e-6) * total as f64) as usize;
+            let upto = due.max(sent + PACE_BATCH).min(total);
+            for chunk in &chunks[sent..upto] {
+                let _ = socket.send_to(chunk, addr).await;
+            }
+            sent = upto;
+            if sent < total {
+                sleep(Duration::from_millis(1)).await;
+            }
+        }
+    }
+}
+
+async fn stream_video(hub: Arc<Hub>, s: Arc<Session>) {
+    let Ok(mut encoder) = Encoder::new(s.config.width, s.config.height) else {
+        warn!(session = s.id, "encoder setup failed");
+        return s.stop.cancel();
+    };
+    let mut frames = hub.frames.subscribe();
+    let (pace_tx, pace_rx) = amsc::channel(1);
+    tokio::spawn(pacer(hub.video_udp.clone(), pace_rx, s.stop.clone()));
+    let mut image: Option<Arc<Vec<u8>>> = None;
+    let mut encoded_at = 0;
+    let mut last_sent = Instant::now();
+    let mut next = Instant::now();
+    loop {
+        let (quality, fps) = {
+            let rate = s.rate.lock().unwrap();
+            (rate.quality(), rate.fps())
+        };
+        let interval = Duration::from_secs_f64(1.0 / fps as f64);
+        tokio::select! {
+            _ = s.stop.cancelled() => return,
+            _ = sleep_until(next.into()) => {}
+        }
+        next = (next + interval).max(Instant::now());
+        let fresh = frames.has_changed().unwrap_or(false) || image.is_none() || quality != encoded_at;
+        let timestamp_us = if fresh {
+            let Some(raw) = frames.borrow_and_update().clone() else { continue };
+            let captured = raw.captured_at.saturating_duration_since(hub.epoch).as_micros() as u64;
+            let job = tokio::task::spawn_blocking(move || {
+                let out = encoder.encode(&raw, quality);
+                (encoder, out)
+            });
+            let Ok((back, out)) = job.await else { return s.stop.cancel() };
+            encoder = back;
+            match out {
+                Ok(jpeg) => image = Some(Arc::new(jpeg)),
+                Err(e) => {
+                    warn!(session = s.id, "encode failed: {e:#}");
+                    continue;
+                }
+            }
+            encoded_at = quality;
+            captured
+        } else if last_sent.elapsed() >= RESEND_AFTER {
+            hub.now_us()
+        } else {
+            continue;
+        };
+        let Some(jpeg) = &image else { continue };
+        let transport = s.transport();
+        let id = s.next_frame.fetch_add(1, Relaxed);
+        let fec = s.config.fec && transport == Transport::Udp;
+        let Some(frame) = packetize(id, timestamp_us, jpeg, fec) else {
+            warn!(session = s.id, size = jpeg.len(), "frame too large");
+            continue;
+        };
+        let size = frame.bytes as u64;
+        let frame = Arc::new(frame);
+        last_sent = Instant::now();
+        match transport {
+            Transport::Udp => {
+                let addr = *s.udp_addr.lock().unwrap();
+                let Some(addr) = addr else { continue };
+                if pace_tx.try_send(Paced { frame, addr, budget: interval / 2 }).is_err() {
+                    continue;
+                }
+            }
+            Transport::Tcp => {
+                let Some(offer) = s.stripes.offer(frame) else { continue };
+                s.rate.lock().unwrap().on_stripe_backlog(offer.backed_up);
+            }
+        }
+        s.frames_sent.fetch_add(1, Relaxed);
+        s.bytes_sent.fetch_add(size, Relaxed);
+    }
+}
