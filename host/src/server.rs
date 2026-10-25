@@ -261,3 +261,208 @@ async fn input_udp_loop(hub: Arc<Hub>, socket: UdpSocket) {
     }
 }
 
+async fn attach_loop(hub: Arc<Hub>, listener: TcpListener, kind: u8) {
+    loop {
+        let accepted = tokio::select! {
+            _ = hub.stop.cancelled() => return,
+            accepted = listener.accept() => accepted,
+        };
+        match accepted {
+            Ok((stream, _)) => {
+                tokio::spawn(attach(hub.clone(), stream, kind));
+            }
+            Err(e) => warn!("data accept failed: {e}"),
+        }
+    }
+}
+
+async fn attach(hub: Arc<Hub>, mut stream: TcpStream, kind: u8) -> Option<()> {
+    let mut head = [0; ATTACH_LEN];
+    timeout(ATTACH_TIMEOUT, stream.read_exact(&mut head)).await.ok()?.ok()?;
+    let request = Attach::parse(&head).ok()?;
+    if request.kind != kind {
+        return None;
+    }
+    let session = hub.session(&request.token)?;
+    stream.set_nodelay(true).ok()?;
+    if kind == 0 {
+        let _ = SockRef::from(&stream).set_send_buffer_size(hub.opts.tcp_sndbuf);
+        session.stripes.attach(request.stripe as usize, stream);
+        debug!(session = session.id, stripe = request.stripe, "stripe attached");
+    } else if request.stripe == 0 && !session.input_busy.swap(true, Relaxed) {
+        let result = input_tcp(&session, &mut stream).await;
+        session.input_busy.store(false, Relaxed);
+        result?;
+    }
+    Some(())
+}
+
+async fn input_tcp(session: &Session, stream: &mut TcpStream) -> Option<()> {
+    let mut reader = BufReader::new(stream);
+    let mut buf = [0; MAX_INPUT];
+    loop {
+        let len = tokio::select! {
+            _ = session.stop.cancelled() => return None,
+            len = reader.read_u16() => len.ok()? as usize,
+        };
+        if len > MAX_INPUT {
+            return None;
+        }
+        reader.read_exact(&mut buf[..len]).await.ok()?;
+        let packet = InputPacket::parse(&buf[..len]).ok()?;
+        if packet.token != session.token {
+            return None;
+        }
+        session.input(&packet.events);
+    }
+}
+
+async fn read_control(mut r: tokio::net::tcp::OwnedReadHalf, tx: amsc::Sender<Result<Msg, Bye>>) {
+    let mut reader = BufReader::new(&mut r);
+    let mut buf = [0; MAX_CONTROL];
+    loop {
+        let Ok(len) = reader.read_u32().await else { return };
+        let Ok(kind) = reader.read_u8().await else { return };
+        if len as usize > MAX_CONTROL {
+            let _ = tx.send(Err(Bye::Protocol)).await;
+            return;
+        }
+        let body = &mut buf[..len as usize];
+        if reader.read_exact(body).await.is_err() {
+            return;
+        }
+        let parsed = Msg::decode(kind, body).map_err(|_| Bye::Protocol);
+        let failed = parsed.is_err();
+        if tx.send(parsed).await.is_err() || failed {
+            return;
+        }
+    }
+}
+
+async fn send(w: &mut OwnedWriteHalf, msg: &Msg) -> Result<()> {
+    timeout(WRITE_TIMEOUT, w.write_all(&msg.encode())).await.context("control write stalled")??;
+    Ok(())
+}
+
+async fn serve_control(hub: Arc<Hub>, stream: TcpStream, peer: SocketAddr) {
+    let _ = stream.set_nodelay(true);
+    let (r, mut w) = stream.into_split();
+    let (tx, rx) = amsc::channel(32);
+    let reader = tokio::spawn(read_control(r, tx));
+    let mut conn = Conn { hub, peer, session: None, selector: None };
+    match conn.run(&mut w, rx).await {
+        Ok(reason) => {
+            let _ = send(&mut w, &Msg::Bye(reason)).await;
+        }
+        Err(e) => debug!(%peer, "control ended: {e:#}"),
+    }
+    reader.abort();
+    conn.finish();
+}
+
+struct Conn {
+    hub: Arc<Hub>,
+    peer: SocketAddr,
+    session: Option<Arc<Session>>,
+    selector: Option<Selector>,
+}
+
+impl Conn {
+    fn finish(&mut self) {
+        let Some(session) = self.session.take() else { return };
+        session.stop.cancel();
+        self.hub.sessions.lock().unwrap().remove(&session.token);
+        let _ = session.input_tx.send(Cmd::Release(session.id));
+        info!(session = session.id, peer = %self.peer, "session closed");
+    }
+
+    async fn run(
+        &mut self,
+        w: &mut OwnedWriteHalf,
+        mut rx: amsc::Receiver<Result<Msg, Bye>>,
+    ) -> Result<Bye> {
+        let hub = self.hub.clone();
+        let mut machine = Machine::new(hub.opts.pin.clone(), random()?, random()?);
+        let mut deadline = Instant::now() + STEP_TIMEOUT;
+        let mut ping = tokio::time::interval(Duration::from_secs(1));
+        let mut last_pong = Instant::now();
+        let mut streaming = false;
+        let mut paired = false;
+        let mut sequence = 0;
+        loop {
+            let msg = tokio::select! {
+                _ = hub.stop.cancelled() => return Ok(Bye::Normal),
+                _ = sleep_until(deadline.into()), if !streaming => return Ok(Bye::Timeout),
+                _ = ping.tick(), if paired => {
+                    if last_pong.elapsed() > PONG_TIMEOUT {
+                        return Ok(Bye::Timeout);
+                    }
+                    sequence += 1;
+                    send(w, &Msg::Ping { seq: sequence, t1: hub.now_us() }).await?;
+                    continue;
+                }
+                msg = rx.recv() => msg,
+            };
+            let Some(msg) = msg else { anyhow::bail!("peer disconnected") };
+            let step = match msg.and_then(|m| machine.on_msg(m)) {
+                Ok(step) => step,
+                Err(reason) => {
+                    if reason == Bye::Auth {
+                        hub.lockouts.fail(self.peer.ip());
+                    }
+                    return Ok(reason);
+                }
+            };
+            deadline = Instant::now() + STEP_TIMEOUT;
+            match step {
+                Step::Reply(reply) => {
+                    if hub.lockouts.blocked(self.peer.ip()) {
+                        return Ok(Bye::Auth);
+                    }
+                    send(w, &reply).await?
+                }
+                Step::PairFailed(reply) => {
+                    hub.lockouts.fail(self.peer.ip());
+                    send(w, &reply).await?
+                }
+                Step::Paired => {
+                    hub.lockouts.clear(self.peer.ip());
+                    last_pong = Instant::now();
+                    paired = true;
+                    ping.reset();
+                    send(w, &Msg::PairOk { token: machine.token() }).await?;
+                }
+                Step::Configured(config) => {
+                    if !self.configure(config, machine.token()) {
+                        return Ok(Bye::Full);
+                    }
+                    send(w, &Msg::ConfigOk(config)).await?;
+                }
+                Step::Probed { echoed } => {
+                    let Some(transport) = self.select(echoed).await else {
+                        return Ok(Bye::NoPath);
+                    };
+                    machine.start_streaming();
+                    streaming = true;
+                    let session = self.session.as_ref().context("no session")?.clone();
+                    session.transport.store(transport as u8, Relaxed);
+                    self.selector = Some(Selector::new(session.config.mode, transport, Instant::now()));
+                    tokio::spawn(stream_video(hub.clone(), session.clone()));
+                    send(w, &Msg::Start { transport, first_frame_id: session.next_frame.load(Relaxed) }).await?;
+                    hub.metrics.line(format_args!("{},{},start,{transport:?},,,,,,,,,,,,", hub.now_us(), session.id));
+                    info!(session = session.id, peer = %self.peer, ?transport, "streaming");
+                }
+                Step::Stats(stats) => self.on_stats(w, &stats).await?,
+                Step::Ping { seq, t1 } => send(w, &Msg::Pong { seq, t1, t2: hub.now_us() }).await?,
+                Step::Pong { t1 } => {
+                    last_pong = Instant::now();
+                    if let Some(session) = &self.session {
+                        session.rate.lock().unwrap().on_rtt(hub.now_us().saturating_sub(t1));
+                    }
+                }
+                Step::Keyframe => {}
+                Step::Closed => return Ok(Bye::Normal),
+            }
+        }
+    }
+
