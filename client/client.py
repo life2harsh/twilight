@@ -122,3 +122,120 @@ class Client:
         except OSError as error:
             print(f"stripe {stripe} stopped: {error}")
 
+    def probe(self):
+        for seq in range(10):
+            try:
+                self.udp.send(p.encode_probe(seq, now_us(), self.token))
+            except OSError:
+                pass
+        echoed = 0
+        deadline = time.monotonic() + 0.3
+        while echoed < 8 and time.monotonic() < deadline:
+            try:
+                data = self.udp.recv(2048)
+            except OSError:
+                continue
+            if len(data) == p.PROBE.size and data[3] == p.FLAG_PROBE_ECHO:
+                echoed += 1
+        self.send(p.PROBE_RESULT, bytes([10, echoed]))
+
+    def udp_loop(self):
+        while self.running:
+            try:
+                data = self.udp.recv(2048)
+            except OSError:
+                continue
+            if data[3] & p.FLAG_PROBE:
+                continue
+            try:
+                self.buffer.add(data, 2 / self.args.fps)
+            except (ValueError, struct.error):
+                pass
+
+    def control_loop(self):
+        try:
+            while self.running:
+                kind, body = p.read_control(self.control)
+                if kind == p.PING:
+                    seq, t1 = p.PING_BODY.unpack(body)
+                    self.send(p.PONG, p.PONG_BODY.pack(seq, t1, now_us()))
+                elif kind == p.MIGRATE:
+                    self.transport = p.TRANSPORT_NAMES[body[0]]
+                    print(f"migrated to {self.transport}")
+                elif kind == p.BYE:
+                    print(f"host said BYE, reason {body[0]}")
+                    break
+        except (OSError, ValueError) as error:
+            print(f"control stopped: {error}")
+        self.running = False
+
+    def stats_loop(self):
+        while self.running:
+            time.sleep(0.5)
+            completed, dropped = self.buffer.take_counts()
+            closed = completed + dropped
+            completion = 1000 * completed // closed if closed else 1000
+            shown, self.displayed = self.displayed, 0
+            silent = self.transport == "UDP" and self.buffer.silent_for() > 0.5
+            flags = p.STATS_UDP_SILENT if silent else 0
+            body = p.STATS_BODY.pack(500, 0, completion, 0, shown * 20, 0, 0, 0, flags)
+            try:
+                self.send(p.STATS, body)
+            except OSError:
+                return
+
+    def run(self):
+        self.handshake()
+        self.attach_stripes()
+        self.probe()
+        transport, first_frame = p.START_BODY.unpack(self.expect(p.START))
+        self.transport = p.TRANSPORT_NAMES[transport]
+        print(f"streaming over {self.transport} from frame {first_frame}")
+        self.buffer.last_chunk = time.monotonic() + 1.5
+        for loop in (self.control_loop, self.udp_loop, self.stats_loop):
+            threading.Thread(target=loop, daemon=True).start()
+        self.display_loop()
+
+    def display_loop(self):
+        ended_at = time.monotonic() + self.args.seconds if self.args.seconds else None
+        while self.running and (ended_at is None or time.monotonic() < ended_at):
+            item = self.buffer.take_latest()
+            if item is None:
+                time.sleep(0.002)
+                continue
+            frame_id, _, image = item
+            self.displayed += 1
+            if self.args.headless:
+                continue
+            frame = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+            cv2.putText(frame, f"{self.transport} frame {frame_id}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.imshow("Twilight", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+        self.running = False
+        print(f"finished, last frame shown {self.buffer.shown}")
+        try:
+            self.send(p.BYE, bytes([0]))
+        except OSError:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Twilight client")
+    parser.add_argument("host")
+    parser.add_argument("--pin", required=True)
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--quality", type=int, default=60)
+    parser.add_argument("--stripes", type=int, default=4)
+    parser.add_argument("--mode", type=int, default=p.MODE_AUTO, choices=[0, 1, 2])
+    parser.add_argument("--seconds", type=float, default=0)
+    parser.add_argument("--headless", action="store_true")
+    Client(parser.parse_args()).run()
+
+
+if __name__ == "__main__":
+    main()
