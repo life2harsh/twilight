@@ -13,12 +13,15 @@ CN lab project, JIIT Noida.
 
 ## Setup
 
-```sh
-./setup.sh                 # client and host, installs what is missing, runs the tests
-./setup.sh --client-only   # Python client only
+Installs what is missing, builds, and runs the tests. Add the flag for the Python client only.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1 [-ClientOnly]   # Windows
 ```
 
-On Windows run it from Git Bash.
+```sh
+./setup.sh [--client-only]                                          # Linux
+```
 
 ## Quick start
 

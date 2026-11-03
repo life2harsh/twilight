@@ -6,7 +6,6 @@ client_only=0
 [ "${1:-}" = "--client-only" ] && client_only=1
 step() { printf '\n== %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
-windows() { case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) return 0 ;; *) return 1 ;; esac; }
 
 linux_packages() {
   if have cc && have cmake && have nasm && have pkg-config &&
@@ -32,11 +31,7 @@ linux_packages() {
 
 step "Python client"
 if ! have uv; then
-  if windows; then
-    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-  else
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-  fi
+  curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 (cd client && uv sync && uv run pytest -q)
@@ -47,20 +42,10 @@ if [ "$client_only" = 1 ]; then
 fi
 
 step "Rust host"
-if windows; then
-  for tool in cargo cmake nasm; do
-    if ! have "$tool"; then
-      echo "Missing $tool. Run in PowerShell, then reopen this shell:" >&2
-      echo "  winget install -e --id Rustlang.Rustup; winget install -e --id Kitware.CMake; winget install -e --id NASM.NASM" >&2
-      exit 1
-    fi
-  done
-else
-  linux_packages
-  if ! have cargo; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    export PATH="$HOME/.cargo/bin:$PATH"
-  fi
+linux_packages
+if ! have cargo; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  export PATH="$HOME/.cargo/bin:$PATH"
 fi
 (cd host && cargo build --release && cargo test --release -q)
 
