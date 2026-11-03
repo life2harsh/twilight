@@ -3,13 +3,13 @@
 A screen streaming protocol that runs over UDP or TCP and moves between them mid-stream.
 CN lab project, JIIT Noida.
 
-| Path | What | Owner |
+| Path | What |
 |---|---|---|
-| `spec/` | Protocol, design notes, shared byte vectors | everyone |
+| `spec/` | Protocol, design notes, shared byte vectors |
 | `host/` | Rust host | Harsh |
-| `client/` | Python client | Jaydeep, Anushka |
-| `testbed/` | Network experiments, no root needed | everyone |
-| `report/` | Changes from the synopsis | everyone |
+| `client/` | Python client |
+| `testbed/` | Network experiments, no root needed |
+| `report/` | Changes from the synopsis |
 
 ## Quick start
 
