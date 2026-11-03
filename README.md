@@ -11,6 +11,15 @@ CN lab project, JIIT Noida.
 | `testbed/` | Network experiments, no root needed |
 | `report/` | Changes from the synopsis |
 
+## Setup
+
+```sh
+./setup.sh                 # client and host, installs what is missing, runs the tests
+./setup.sh --client-only   # Python client only
+```
+
+On Windows run it from Git Bash.
+
 ## Quick start
 
 ```sh
