@@ -4,7 +4,7 @@ A screen streaming protocol that runs over UDP or TCP and moves between them mid
 CN lab project, JIIT Noida.
 
 | Path | What |
-|---|---|---|
+|---|---|
 | `spec/` | Protocol, design notes, shared byte vectors |
 | `host/` | Rust host | Harsh |
 | `client/` | Python client |
