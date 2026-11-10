@@ -13,7 +13,8 @@ function RefreshPath {
     $env:Path = @(
         [Environment]::GetEnvironmentVariable('Path', 'Machine'),
         [Environment]::GetEnvironmentVariable('Path', 'User'),
-        "$HOME\.local\bin", "$HOME\.cargo\bin", "$env:ProgramFiles\CMake\bin", "$env:ProgramFiles\NASM"
+        "$HOME\.local\bin", "$HOME\.cargo\bin", "$env:ProgramFiles\CMake\bin", "$env:ProgramFiles\NASM",
+        "$HOME\AppData\Local\bin\NASM"
     ) -join ';'
 }
 function Winget($id, $extra = @()) {
@@ -47,7 +48,13 @@ if (-not (HaveMsvc)) {
     Winget Microsoft.VisualStudio.2022.BuildTools @('--override', '--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended')
 }
 if (-not (Have cmake)) { Winget Kitware.CMake }
-if (-not (Have nasm)) { Winget NASM.NASM }
+if (-not (Have nasm)) {
+    Winget NASM.NASM
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ($userPath -notlike "*AppData\Local\bin\NASM*") {
+        [Environment]::SetEnvironmentVariable('Path', "$userPath;$HOME\AppData\Local\bin\NASM", 'User')
+    }
+}
 if (-not (Have cargo)) { Winget Rustlang.Rustup; Run rustup default stable }
 
 Push-Location host
