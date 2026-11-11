@@ -24,22 +24,42 @@ The first TCP binding abandoned a started frame after four frame intervals. Unit
 Under `netem` at 5% loss it delivered 0.4 fps, because almost no frame finished within 133 ms.
 Changing the limit to 1 s raised this to 4.4 fps. Only the network testbed found this.
 
-## Preliminary results
+## Results
 
-720p synthetic source, 30 fps target, starter client, `testbed/lab.sh`. These are single short
-runs without FEC on the client, so use them as a guide and rerun for the report.
+720p synthetic source, 30 fps and quality 60 requested, full client with FEC, `testbed/lab.sh`,
+12 s runs. Single runs; repeat each three times for the report's graphs. Columns are the
+received fps, then the share of frames completed in brackets.
 
-| Condition | 1 connection | 4 stripes |
-|---|---|---|
-| No impairment | 30.0 fps | 30.0 fps |
-| 1% loss, 20 ms | 12.9 fps | 19.6 fps |
-| 5% loss, 20 ms | 4.4 fps | 6.1 fps |
-| 10% loss, 20 ms | 3.3 fps | 3.9 fps |
-| 20 Mbit/s cap, 10 ms | 28.6 fps | 21.0 fps |
+| Condition | UDP + FEC | TCP, 1 connection | TCP, 4 stripes |
+|---|---|---|---|
+| No impairment | 29.9 (100%) | 30.1 (100%) | 30.1 (100%) |
+| 1% loss, 20 ms | 29.3 (97%) | 12.3 (100%) | 28.7 (100%) |
+| 5% loss, 20 ms | 6.1 (58%) | 5.2 (100%) | 9.5 (100%) |
+| 10% loss, 20 ms | 2.8 (28%) | 2.2 (92%) | 6.0 (92%) |
+| 20 Mbit/s cap, 10 ms | 25.5 (95%) | 28.7 (100%) | 24.6 (100%) |
 
-Striping helps under random loss and costs throughput under a pure bandwidth cap, where four
-flows compete with each other.
+Loss measured by the client matched `netem`: 1.0%, 5.8% and 10.7%.
 
-UDP blocked mid-stream migrated to TCP in roughly 0.85 s, estimated from the run log. The starter
-client only reports silence on its 500 ms timer; reporting at once (client task 7) should bring
-this towards the 0.5 s silence limit. Measure this properly for the report.
+- **FEC.** At 1% loss UDP stays at 29 fps. The starter client, without FEC, fell to 12.9 fps
+  on one TCP connection under the same loss. One parity chunk per four data chunks recovers
+  almost every frame.
+- **Striping.** Four stripes beat one connection under random loss: at 1% loss, 28.7 fps
+  against 12.3. A single stream stalls on every retransmission, but stripes stall
+  independently. Under a pure bandwidth cap, one connection wins, because four flows compete
+  with each other.
+- **Heavy loss.** At 5% and above, UDP completes too few frames. In auto mode the host leaves
+  UDP for TCP, as the completion rule in `spec/DESIGN.md` predicts.
+
+**Migration.** With UDP blocked mid-stream, the client reported silence 499 ms after the
+block, and the host moved to TCP on that STATS. The starter client took about 0.85 s, because
+it waited for its 500 ms timer. With UDP unblocked, the session returned at the next probe
+burst plus 3 s of clean probes, and played at 30 fps throughout.
+
+## Client changes found by testing
+
+| Problem | Fix |
+|---|---|
+| Opening the window stalled Python while UDP was flowing: 6.6% loss in the first window, and sometimes a needless move to TCP on localhost | Open the window before probing and START |
+| Counting loss when a frame completes undercounts parity that arrives later | Keep completed frames until their stale time, then count |
+| Overtaken frames on striped TCP looked like failures | Count them separately, on TCP only. On UDP an overtaken frame is real loss |
+| OpenCV windows report no key release and few special keys | pygame window. OpenCV and numpy are no longer needed |

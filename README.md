@@ -6,7 +6,7 @@ CN lab project, JIIT Noida.
 | Path | What |
 |---|---|
 | `spec/` | Protocol, design notes, shared byte vectors |
-| `host/` | Rust host | Harsh |
+| `host/` | Rust host |
 | `client/` | Python client |
 | `testbed/` | Network experiments, no root needed |
 | `report/` | Changes from the synopsis |
@@ -30,7 +30,7 @@ cd host && cargo run --release -- --pin 123456
 cd client && uv sync && uv run client.py HOST_IP --pin 123456
 ```
 
-Press `q` in the video window to quit. Use `--source synthetic` on the host when you have no
+Close the video window to quit. Use `--source synthetic` on the host when you have no
 display.
 
 Each folder has its own README.
