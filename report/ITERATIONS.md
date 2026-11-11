@@ -95,3 +95,12 @@ The same session found two more host bugs:
   extent because it never learned the output size, so the compositor ignored every move.
   Clicks worked because they use a different request. The host now drives the
   `zwlr_virtual_pointer_v1` protocol directly with the real extent.
+- **Quality stuck at the floor on TCP over Wi-Fi.** The TCP congestion rule compared the
+  latest ping RTT against twice the minimum plus 20 ms. On Wi-Fi the minimum was about 2 ms,
+  so one ordinary 50 ms spike cut quality by 20%, and spikes came faster than recovery. The
+  rule now uses a smoothed RTT (RFC 6298, gain 1/8). A single spike is ignored, and sustained
+  queueing still counts as congestion.
+- **The college network drops bulk UDP but passes probes.** 32-byte probes echoed cleanly
+  while 45–66% of 1.2 KB video datagrams were lost, so the host went back to UDP and fell to
+  TCP again, at the doubling 10–80 s hold-off. Future work: probes padded to the full
+  datagram size.

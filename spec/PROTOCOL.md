@@ -237,8 +237,8 @@ latency_us:u32 frames_skipped:u32 udp_clean_ms:u32 flags:u8` (25 bytes)
 The host acts on every STATS, multiplying quality by 0.8 when any congestion signal is true:
 
 - UDP: loss above 2%, or jitter above one frame interval.
-- TCP: the chosen stripe held more than one frame for three frames in a row, or RTT above
-  twice the session minimum plus 20 ms.
+- TCP: the chosen stripe held more than one frame for three frames in a row, or smoothed RTT
+  (RFC 6298, gain 1/8) above twice the session minimum plus 20 ms.
 
 At the quality floor of 20 it reduces fps by the same factor, to a floor of 5. After 2 s with
 no signal it raises fps to the target first, then adds 5 to quality, up to the configured

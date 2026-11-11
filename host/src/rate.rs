@@ -16,6 +16,7 @@ pub struct Rate {
     last_signal: Instant,
     min_rtt_us: u64,
     rtt_us: u64,
+    srtt_us: u64,
     backlog: u32,
 }
 
@@ -33,6 +34,7 @@ impl Rate {
             last_signal: now,
             min_rtt_us: u64::MAX,
             rtt_us: 0,
+            srtt_us: 0,
             backlog: 0,
         }
     }
@@ -51,6 +53,7 @@ impl Rate {
 
     pub fn on_rtt(&mut self, rtt_us: u64) {
         self.rtt_us = rtt_us;
+        self.srtt_us = if self.srtt_us == 0 { rtt_us } else { (self.srtt_us * 7 + rtt_us) / 8 };
         self.min_rtt_us = self.min_rtt_us.min(rtt_us);
     }
 
@@ -65,7 +68,7 @@ impl Rate {
             }
             Transport::Tcp => {
                 self.backlog >= QUEUE_FRAMES
-                    || (self.min_rtt_us != u64::MAX && self.rtt_us > self.min_rtt_us * 2 + 20_000)
+                    || (self.min_rtt_us != u64::MAX && self.srtt_us > self.min_rtt_us * 2 + 20_000)
             }
         }
     }
@@ -114,6 +117,22 @@ mod tests {
             .collect();
         assert_eq!(seen, [48, 38, 30, 24, 20, 20, 20]);
         assert_eq!(r.fps(), 19);
+    }
+
+    #[test]
+    fn rtt_spike_is_not_congestion_but_sustained_rise_is() {
+        let t = Instant::now();
+        let mut r = Rate::new(60, 30, t);
+        for rtt in [2_000, 2_000, 50_000, 2_000] {
+            r.on_rtt(rtt);
+            r.on_stats(&Stats::default(), Transport::Tcp, t);
+        }
+        assert_eq!(r.quality(), 60);
+        for _ in 0..8 {
+            r.on_rtt(60_000);
+        }
+        r.on_stats(&Stats::default(), Transport::Tcp, t);
+        assert_eq!(r.quality(), 48);
     }
 
     #[test]
@@ -172,20 +191,6 @@ mod tests {
         r.on_stats(&s, Transport::Tcp, t);
         assert_eq!(r.quality(), 60);
         r.on_stripe_backlog(true);
-        r.on_stats(&s, Transport::Tcp, t);
-        assert_eq!(r.quality(), 48);
-    }
-
-    #[test]
-    fn tcp_rtt_growth_is_congestion() {
-        let t = Instant::now();
-        let mut r = Rate::new(60, 30, t);
-        let s = Stats::default();
-        r.on_rtt(10_000);
-        r.on_rtt(40_000);
-        r.on_stats(&s, Transport::Tcp, t);
-        assert_eq!(r.quality(), 60);
-        r.on_rtt(40_001);
         r.on_stats(&s, Transport::Tcp, t);
         assert_eq!(r.quality(), 48);
     }
