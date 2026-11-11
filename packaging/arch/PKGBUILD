@@ -1,0 +1,28 @@
+pkgname=twilight
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Screen streaming over UDP or TCP that migrates between them mid-stream"
+arch=(x86_64)
+url="https://github.com/life2harsh/twilight"
+license=(custom)
+depends=(mesa libxcb libxkbcommon wayland libdrm)
+makedepends=(rust cmake nasm uv)
+options=(!strip !debug !lto)
+_root=$(cd "$startdir/../.." && pwd)
+
+build() {
+  cd "$_root/host"
+  CARGO_TARGET_DIR="$srcdir/target" cargo build --release --locked
+  cd "$_root/client"
+  uv sync
+  LD_LIBRARY_PATH="$(uv run python -c 'import sys; print(sys.base_prefix)')/lib" \
+    uv run --with pyinstaller pyinstaller --onefile --windowed --name Twilight --log-level WARN \
+    --distpath "$srcdir/dist" --workpath "$srcdir/build" --specpath "$srcdir" client.py
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/twilight-host" "$pkgdir/usr/bin/twilight-host"
+  install -Dm755 "$srcdir/dist/Twilight" "$pkgdir/usr/bin/twilight"
+  install -Dm644 "$startdir/twilight.desktop" "$pkgdir/usr/share/applications/twilight.desktop"
+  install -Dm644 "$startdir/twilight-host.desktop" "$pkgdir/usr/share/applications/twilight-host.desktop"
+}

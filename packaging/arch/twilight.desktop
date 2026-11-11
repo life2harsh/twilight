@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Twilight
+Comment=Watch and control another machine
+Exec=twilight
+Icon=video-display
+Categories=Network;RemoteAccess;

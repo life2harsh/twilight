@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 *.pcap
 results/
+packaging/arch/pkg/
+packaging/arch/src/
+packaging/arch/*.pkg.tar.zst
+client/build/
+client/dist/
+client/*.spec

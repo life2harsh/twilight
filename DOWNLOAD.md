@@ -17,3 +17,11 @@ The first time it runs, Windows may say "Windows protected your PC". Click **Mor
 networks.
 
 On Linux, run `chmod +x` on the files first.
+
+On Arch, install the package instead. It adds `twilight` and `twilight-host` to the app menu:
+
+```sh
+sudo pacman -U twilight-*.pkg.tar.zst
+```
+
+To build it from a checkout: `cd packaging/arch && makepkg -si`.

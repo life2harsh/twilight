@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Twilight Host
+Comment=Share this screen; shows the PIN
+Exec=twilight-host
+Icon=video-display
+Terminal=true
+Categories=Network;RemoteAccess;
