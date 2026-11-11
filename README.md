@@ -11,6 +11,11 @@ CN lab project, JIIT Noida.
 | `testbed/` | Network experiments, no root needed |
 | `report/` | Changes from the synopsis |
 
+## Download
+
+Ready-made exes for Windows and Linux are on the Releases page; see `DOWNLOAD.md`. Run the
+client with no arguments for the connect window.
+
 ## Setup
 
 Installs what is missing, builds, and runs the tests. Add the flag for the Python client only.
