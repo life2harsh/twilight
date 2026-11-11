@@ -1,5 +1,3 @@
-import time
-
 import protocol as p
 from client import Reassembler, newer
 from test_protocol import VECTORS
@@ -33,7 +31,7 @@ def test_fec_completes_frame_and_counts_loss():
 def test_stale_udp_frame_is_dropped():
     buffer = Reassembler(30, False)
     buffer.add(chunk(1, 0, 2), True)
-    time.sleep(0.07)
+    buffer.frames[1]["expires"] = 0
     buffer.add(chunk(2, 0, 1), True)
     window = buffer.take_window()[0]
     assert window["dropped"] == 1 and window["completed"] == 1

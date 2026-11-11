@@ -1,5 +1,5 @@
 pkgname=twilight
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Screen streaming over UDP or TCP that migrates between them mid-stream"
 arch=(x86_64)
