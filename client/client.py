@@ -369,6 +369,9 @@ class Client:
                 self.send(p.BYE, bytes([0]))
             except OSError:
                 pass
+            for sock in (self.control, self.udp, self.input_udp, self.input_tcp):
+                if sock:
+                    sock.close()
             print(f"finished, last frame shown {self.buffer.shown}, last stats {self.stats}")
 
     def display_loop(self, viewer):
@@ -394,8 +397,8 @@ class Client:
 
 def main():
     parser = argparse.ArgumentParser(description="Twilight client")
-    parser.add_argument("host")
-    parser.add_argument("--pin", required=True)
+    parser.add_argument("host", nargs="?", help="Omit to open the connect window")
+    parser.add_argument("--pin")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
@@ -407,7 +410,20 @@ def main():
     parser.add_argument("--csv", help="Write one row of statistics per STATS window to this file")
     parser.add_argument("--seconds", type=float, default=0)
     parser.add_argument("--headless", action="store_true")
-    Client(parser.parse_args()).run()
+    args = parser.parse_args()
+    if args.host:
+        if not args.pin:
+            parser.error("--pin is required")
+        return Client(args).run()
+    from launcher import ask
+    error = None
+    while choice := ask(error):
+        vars(args).update(choice)
+        try:
+            Client(args).run()
+            error = None
+        except Exception as failure:
+            error = f"Could not stream from {args.host}: {failure}"
 
 
 if __name__ == "__main__":

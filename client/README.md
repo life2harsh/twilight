@@ -22,7 +22,8 @@ uv run pytest
 | `--csv FILE` | One row per STATS window |
 | `--headless --seconds N` | No window, stop after N seconds (testbed) |
 
-Close the window to quit. While it has focus, mouse and keys go to the host. Use `--no-input`
+Run with no host to get a connect window, which remembers the last IP. Close the video window
+to return to it. While the video window has focus, mouse and keys go to the host. Use `--no-input`
 when host and client run on the same machine, or the client will drive its own cursor.
 
 Without a host machine, start one locally: `twilight-host --source synthetic --pin 123456`.
