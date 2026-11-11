@@ -39,9 +39,9 @@ fi
 sleep 0.5
 
 if [ -n "$block_at" ]; then
-  ( sleep "$block_at"; iptables -A OUTPUT -p udp -j DROP
+  ( sleep "$block_at"; iptables -A OUTPUT -p udp -j DROP; date +%s.%N >"$out/$name.blocked_at"
     if [ -n "$unblock_at" ]; then sleep $((unblock_at - block_at)); iptables -D OUTPUT -p udp -j DROP; fi ) &
 fi
 
 in_peer env PYTHONUNBUFFERED=1 "$python" "$root/client/client.py" 10.9.0.1 --pin "$pin" --mode "$mode" \
-  --stripes "$stripes" --seconds "$seconds" --headless 2>&1 | tee "$out/$name.client.log"
+  --stripes "$stripes" --seconds "$seconds" --headless --csv "$out/$name.client.csv" 2>&1 | tee "$out/$name.client.log"

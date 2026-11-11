@@ -19,5 +19,5 @@ def summarize(path):
     return f"{path.stem:18} rx {fps:5.1f} fps  done {completion:5.1f}%  q {quality:4.1f}  {mbps:6.1f} Mbps  {' '.join(moves)}"
 
 
-for name in sys.argv[1:]:
+for name in (n for n in sys.argv[1:] if not n.endswith(".client.csv")):
     print(summarize(Path(name)))
