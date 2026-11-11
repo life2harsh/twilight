@@ -63,3 +63,18 @@ burst plus 3 s of clean probes, and played at 30 fps throughout.
 | Counting loss when a frame completes undercounts parity that arrives later | Keep completed frames until their stale time, then count |
 | Overtaken frames on striped TCP looked like failures | Count them separately, on TCP only. On UDP an overtaken frame is real loss |
 | OpenCV windows report no key release and few special keys | pygame window. OpenCV and numpy are no longer needed |
+
+## Found on real hardware
+
+The first two-laptop run, over Wi-Fi with real screen capture, fell to quality 20 and 5 fps
+with no loss at all. The client reported 14 s of jitter. The cause was in the host:
+
+- The first frame of a session carried the capture time of the frame grabbed when the host
+  started, which was 4 minutes old.
+- Re-encoding an unchanged screen at a new quality reused that frame's old capture time.
+
+The jitter alarm lowered quality, the lower quality forced another re-encode, and that
+re-encode raised another false alarm. Now only a genuinely new capture carries its capture
+time, and everything else carries the send time, as spec section 4 says. After the fix:
+quality 60, 0% loss, about 10 ms jitter and a 10 to 20 ms round trip. The synthetic source
+cannot show this bug, because its frames are always new.

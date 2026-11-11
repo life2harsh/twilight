@@ -601,10 +601,11 @@ async fn stream_video(hub: Arc<Hub>, s: Arc<Session>) {
             _ = sleep_until(next.into()) => {}
         }
         next = (next + interval).max(Instant::now());
-        let fresh = frames.has_changed().unwrap_or(false) || image.is_none() || quality != encoded_at;
-        let timestamp_us = if fresh {
+        let changed = frames.has_changed().unwrap_or(false);
+        let timestamp_us = if changed || image.is_none() || quality != encoded_at {
             let Some(raw) = frames.borrow_and_update().clone() else { continue };
-            let captured = raw.captured_at.saturating_duration_since(hub.epoch).as_micros() as u64;
+            let captured =
+                if changed { raw.captured_at.saturating_duration_since(hub.epoch).as_micros() as u64 } else { hub.now_us() };
             let job = tokio::task::spawn_blocking(move || {
                 let out = encoder.encode(&raw, quality);
                 (encoder, out)
