@@ -89,3 +89,38 @@ def parse_chunk(data):
 
 def set_nodelay(sock):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+
+MOUSE_MOVE = 1
+MOUSE_BUTTON = 2
+SCROLL = 3
+KEY = 4
+FEC_GROUP = 4
+INPUT_HEADER = struct.Struct(">HBB16s")
+EVENT = struct.Struct(">IBBHHIH")
+
+
+def parity_groups(total):
+    return -(-total // FEC_GROUP)
+
+
+def encode_input(token, events):
+    return INPUT_HEADER.pack(MAGIC, VERSION, len(events), token) + b"".join(EVENT.pack(*e, 0) for e in events)
+
+
+def repair(data, parity, total):
+    groups = parity_groups(total)
+    for group, body in parity.items():
+        members = range(group, total, groups)
+        missing = [i for i in members if i not in data]
+        if len(missing) != 1:
+            continue
+        length = int.from_bytes(body[:2])
+        size = len(body) - 2
+        xor = int.from_bytes(body[2:])
+        for i in members:
+            if i in data:
+                length ^= len(data[i])
+                xor ^= int.from_bytes(data[i].ljust(size, b"\0"))
+        if length <= size:
+            data[missing[0]] = xor.to_bytes(size)[:length]
