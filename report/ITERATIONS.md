@@ -78,3 +78,16 @@ re-encode raised another false alarm. Now only a genuinely new capture carries i
 time, and everything else carries the send time, as spec section 4 says. After the fix:
 quality 60, 0% loss, about 10 ms jitter and a 10 to 20 ms round trip. The synthetic source
 cannot show this bug, because its frames are always new.
+
+The same session found two more host bugs:
+
+- **Input was applied twice.** enigo sent every event through both Wayland and XWayland, so
+  CapsLock toggled twice and Shift+J typed `i`. The host now uses Wayland only when it is
+  available. The client now sends the character actually typed (`J`, not Shift plus `j`), so
+  case and symbols no longer depend on the host's keymap.
+- **Capture froze.** On wlroots compositors such as niri and Hyprland, xcap took every frame
+  through the desktop portal's screenshot API. That writes a PNG per frame, which held the
+  host to 4–14 fps. One portal request never answered, and xcap waits without a timeout, so
+  capture stopped for good while the stream kept resending the last image. The host now uses
+  wlr-screencopy directly over one persistent connection, with the cursor drawn in, and
+  falls back to xcap elsewhere.

@@ -2391,6 +2391,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hmac",
  "libc",
+ "libwayshot-xcap",
  "serde_json",
  "sha2",
  "socket2",

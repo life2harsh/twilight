@@ -24,11 +24,21 @@ pub struct Raw {
 
 pub enum Source {
     Screen(xcap::Monitor),
+    #[cfg(target_os = "linux")]
+    Screencopy(libwayshot_xcap::WayshotConnection, libwayshot_xcap::output::OutputInfo),
     Synthetic { width: u32, height: u32, tick: u32 },
 }
 
 impl Source {
     pub fn screen(index: usize) -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("WAYLAND_DISPLAY").is_some()
+            && let Ok(conn) = libwayshot_xcap::WayshotConnection::new()
+            && let Some(output) = conn.get_all_outputs().get(index).cloned()
+            && conn.screenshot_single_output(&output, true).is_ok()
+        {
+            return Ok(Self::Screencopy(conn, output));
+        }
         let monitors = xcap::Monitor::all().context("listing monitors")?;
         let monitor = monitors.into_iter().nth(index).ok_or_else(|| anyhow!("no monitor {index}"))?;
         Ok(Self::Screen(monitor))
@@ -37,6 +47,11 @@ impl Source {
     pub fn geometry(&self) -> Result<Geometry> {
         Ok(match self {
             Self::Screen(m) => Geometry { x: m.x()?, y: m.y()?, width: m.width()?, height: m.height()? },
+            #[cfg(target_os = "linux")]
+            Self::Screencopy(_, o) => {
+                let r = o.logical_region.inner;
+                Geometry { x: r.position.x, y: r.position.y, width: r.size.width, height: r.size.height }
+            }
             Self::Synthetic { width, height, .. } => Geometry { x: 0, y: 0, width: *width, height: *height },
         })
     }
@@ -45,6 +60,11 @@ impl Source {
         match self {
             Self::Screen(m) => {
                 let image = m.capture_image()?;
+                Ok((image.width(), image.height(), image.into_raw()))
+            }
+            #[cfg(target_os = "linux")]
+            Self::Screencopy(conn, output) => {
+                let image = conn.screenshot_single_output(output, true)?.into_rgba8();
                 Ok((image.width(), image.height(), image.into_raw()))
             }
             Self::Synthetic { width, height, tick } => {
