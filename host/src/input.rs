@@ -27,15 +27,23 @@ impl Sink for NullSink {
 pub struct ScreenSink {
     enigo: Enigo,
     area: Geometry,
+    #[cfg(target_os = "linux")]
+    pointer: Option<crate::pointer::Pointer>,
 }
 
 impl ScreenSink {
     pub fn new(area: Geometry) -> Result<Self> {
         let mut settings = Settings::default();
-        if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        let wayland = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if wayland {
             settings.x11_display = Some(":wayland-only".into());
         }
-        Ok(Self { enigo: Enigo::new(&settings)?, area })
+        Ok(Self {
+            enigo: Enigo::new(&settings)?,
+            area,
+            #[cfg(target_os = "linux")]
+            pointer: wayland.then(crate::pointer::Pointer::new).and_then(Result::ok),
+        })
     }
 }
 
@@ -89,11 +97,18 @@ fn direction(down: bool) -> Direction {
 impl Sink for ScreenSink {
     fn apply(&mut self, kind: EventKind) -> Result<()> {
         match kind {
-            EventKind::MouseMove { x, y } => self.enigo.move_mouse(
-                to_screen(x, self.area.x, self.area.width),
-                to_screen(y, self.area.y, self.area.height),
-                Coordinate::Abs,
-            )?,
+            EventKind::MouseMove { x, y } => {
+                #[cfg(target_os = "linux")]
+                if let Some(pointer) = &self.pointer {
+                    let (w, h) = (self.area.width, self.area.height);
+                    return pointer.move_to(to_screen(x, 0, w) as u32, to_screen(y, 0, h) as u32, w, h);
+                }
+                self.enigo.move_mouse(
+                    to_screen(x, self.area.x, self.area.width),
+                    to_screen(y, self.area.y, self.area.height),
+                    Coordinate::Abs,
+                )?
+            }
             EventKind::MouseButton { button, down } => {
                 let button = match button {
                     1 => Button::Left,

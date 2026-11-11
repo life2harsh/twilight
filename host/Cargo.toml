@@ -35,6 +35,8 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 enigo = { version = "0.6", features = ["wayland", "x11rb"] }
 libwayshot-xcap = "0.3"
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_System_IO"] }

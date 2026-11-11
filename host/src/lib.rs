@@ -1,5 +1,7 @@
 pub mod fec;
 pub mod input;
+#[cfg(target_os = "linux")]
+pub mod pointer;
 pub mod proto;
 pub mod rate;
 pub mod selector;

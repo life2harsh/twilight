@@ -91,3 +91,7 @@ The same session found two more host bugs:
   capture stopped for good while the stream kept resending the last image. The host now uses
   wlr-screencopy directly over one persistent connection, with the cursor drawn in, and
   falls back to xcap elsewhere.
+- **The mouse did not move.** On Wayland, enigo sent `motion_absolute` with a 0×0 screen
+  extent because it never learned the output size, so the compositor ignored every move.
+  Clicks worked because they use a different request. The host now drives the
+  `zwlr_virtual_pointer_v1` protocol directly with the real extent.
