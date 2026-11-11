@@ -31,7 +31,11 @@ pub struct ScreenSink {
 
 impl ScreenSink {
     pub fn new(area: Geometry) -> Result<Self> {
-        Ok(Self { enigo: Enigo::new(&Settings::default())?, area })
+        let mut settings = Settings::default();
+        if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            settings.x11_display = Some(":wayland-only".into());
+        }
+        Ok(Self { enigo: Enigo::new(&settings)?, area })
     }
 }
 

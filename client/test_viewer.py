@@ -33,6 +33,9 @@ def test_events_become_input():
     pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1, flipped=False))
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a, mod=0, unicode="a", scancode=4))
     pygame.event.post(pygame.event.Event(pygame.KEYUP, key=pygame.K_a, mod=0, unicode="a", scancode=4))
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_j, mod=pygame.KMOD_SHIFT, unicode="J", scancode=13))
+    pygame.event.post(pygame.event.Event(pygame.KEYUP, key=pygame.K_j, mod=pygame.KMOD_SHIFT, unicode="", scancode=13))
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_c, mod=pygame.KMOD_CTRL, unicode="\x03", scancode=6))
     assert viewer.pump()
     viewer.close()
     assert sent == [
@@ -42,4 +45,7 @@ def test_events_become_input():
         (p.SCROLL, {"x": 0, "y": 0xFFFF}),
         (p.KEY, {"state": 1, "code": ord("a")}),
         (p.KEY, {"state": 0, "code": ord("a")}),
+        (p.KEY, {"state": 1, "code": ord("J")}),
+        (p.KEY, {"state": 0, "code": ord("J")}),
+        (p.KEY, {"state": 1, "code": ord("c")}),
     ]

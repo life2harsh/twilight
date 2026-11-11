@@ -24,7 +24,6 @@ SPECIAL = {
     pygame.K_RSHIFT: 0xFFE2,
     pygame.K_LCTRL: 0xFFE3,
     pygame.K_RCTRL: 0xFFE4,
-    pygame.K_CAPSLOCK: 0xFFE5,
     pygame.K_LALT: 0xFFE9,
     pygame.K_RALT: 0xFFEA,
     pygame.K_LGUI: 0xFFEB,
@@ -32,6 +31,13 @@ SPECIAL = {
     pygame.K_DELETE: 0xFFFF,
     **{getattr(pygame, f"K_F{n}"): 0xFFBD + n for n in range(1, 13)},
 }
+
+
+def typed(text):
+    if len(text) == 1 and text.isprintable():
+        code = ord(text)
+        return code if code < 0x100 else 0x01000000 + code
+    return None
 
 
 def keysym(key):
@@ -54,6 +60,7 @@ class Viewer:
         self.font = pygame.font.Font(None, 22)
         self.send = send
         self.area = None
+        self.held = {}
 
     def to_remote(self, pos):
         if not self.area or not self.area.collidepoint(pos):
@@ -79,8 +86,11 @@ class Viewer:
                 self.send(p.MOUSE_BUTTON, state=int(event.type == pygame.MOUSEBUTTONDOWN), code=event.button)
             elif event.type == pygame.MOUSEWHEEL:
                 self.send(p.SCROLL, x=event.x & 0xFFFF, y=-event.y & 0xFFFF)
-            elif event.type in (pygame.KEYDOWN, pygame.KEYUP) and (sym := keysym(event.key)):
-                self.send(p.KEY, state=int(event.type == pygame.KEYDOWN), code=sym)
+            elif event.type == pygame.KEYDOWN and (sym := self.held.get(event.key) or typed(event.unicode) or keysym(event.key)):
+                self.held[event.key] = sym
+                self.send(p.KEY, state=1, code=sym)
+            elif event.type == pygame.KEYUP and (sym := self.held.pop(event.key, None) or keysym(event.key)):
+                self.send(p.KEY, state=0, code=sym)
         if move:
             self.send(p.MOUSE_MOVE, x=move[0], y=move[1])
         return True
