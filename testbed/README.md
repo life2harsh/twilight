@@ -1,5 +1,22 @@
 # Testbed
 
+## Everything at once
+
+```sh
+testbed/run_all.sh          # about 5 minutes
+SECS=5 testbed/run_all.sh   # shorter runs
+```
+
+Runs `cargo test`, `pytest`, a release build, the full `lab.sh` matrix (clean, 1/5/10% loss,
+20 Mbit/s cap, each over UDP, TCP and 4 TCP stripes), a UDP block and unblock for migration,
+the summary table, the ns-2 bottleneck simulation if `ns` is installed, and the graphs. It
+prints PASS or FAIL per stage and exits non-zero on any failure. Output goes to `results/`,
+graphs to `results/figures/` (`modes.png`, `migration.png`, `ns2.png`), and the full log to
+`results/run_all.log`. `plot.py` fetches matplotlib through `uv` on first run, so that run
+needs internet.
+
+## Single runs
+
 Runs host and client in two Linux network namespaces joined by a veth pair, with no root.
 `netem` loss and delay apply to host-to-client traffic.
 
