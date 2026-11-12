@@ -145,6 +145,10 @@ class Client:
 
     def expect(self, wanted):
         kind, body = p.read_control(self.control)
+        while kind == p.PING:
+            seq, t1 = p.PING_BODY.unpack(body)
+            self.send(p.PONG, p.PONG_BODY.pack(seq, t1, now_us()))
+            kind, body = p.read_control(self.control)
         if kind == p.BYE:
             raise ConnectionError(f"host said BYE, reason {body[0]}")
         if kind == p.PAIR_FAIL:
